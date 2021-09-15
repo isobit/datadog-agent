@@ -1,10 +1,11 @@
-//+build ignore
+// +build ignore
 
 package ebpf
 
 /*
 #include "./c/tracer.h"
 #include "./c/tcp_states.h"
+#include "./c/tags-types.h"
 #include "./c/prebuilt/offset-guess.h"
 */
 import "C"
@@ -23,6 +24,8 @@ type BindSyscallArgs C.bind_syscall_args_t
 // udp_recv_sock_t have *sock and *msghdr struct members, we make them opaque here
 type _Ctype_struct_sock uint64
 type _Ctype_struct_msghdr uint64
+
+type Tags C.tags_t
 
 type TCPState uint8
 
@@ -47,3 +50,7 @@ const (
 )
 
 const BatchSize = C.CONN_CLOSED_BATCH_SIZE
+
+var (
+	StaticTagsStrings = [...]string{"NoTags", "HTTP", "LIBSSL"}
+)

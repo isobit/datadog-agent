@@ -117,6 +117,7 @@ type Connections struct {
 	CompilationTelemetryByAsset map[string]RuntimeCompilationTelemetry
 	HTTP                        map[http.Key]http.RequestStats
 	DNSStats                    dns.StatsByKeyByNameByType
+	Tags                        []string
 }
 
 // ConnectionsTelemetry stores telemetry from the system probe related to connections collection
@@ -192,6 +193,7 @@ type ConnectionStats struct {
 	IPTranslation    *IPTranslation
 	IntraHost        bool
 	Via              *Via
+	Tags             []uint32
 
 	IsAssured bool
 }
