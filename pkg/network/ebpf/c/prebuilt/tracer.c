@@ -22,6 +22,7 @@
 #include <uapi/linux/udp.h>
 
 #include "sock.h"
+#include "tags.h"
 
 static __always_inline void handle_tcp_stats(conn_tuple_t* t, struct sock* sk) {
     u32 rtt = 0;
@@ -56,6 +57,9 @@ int kprobe__tcp_sendmsg(struct pt_regs* ctx) {
 
     handle_tcp_stats(&t, skp);
     get_tcp_segment_counts(skp, &packets_in, &packets_out);
+    if (t.dport == 22) {
+        write_map_tags(&t, 1, 0, "SSH_CLIENT", sizeof("SSH_CLIENT"));
+    }
     return handle_message(&t, size, 0, CONN_DIRECTION_UNKNOWN, packets_out, packets_in, PACKET_COUNT_ABSOLUTE);
 }
 
@@ -75,6 +79,9 @@ int kprobe__tcp_sendmsg__pre_4_1_0(struct pt_regs* ctx) {
     }
 
     handle_tcp_stats(&t, sk);
+    if (t.dport == 22) {
+        write_map_tags(&t, 1, 0, "SSH_CLIENT", sizeof("SSH_CLIENT"));
+    }
     get_tcp_segment_counts(sk, &packets_in, &packets_out);
     return handle_message(&t, size, 0, CONN_DIRECTION_UNKNOWN, packets_out, packets_in, PACKET_COUNT_ABSOLUTE);
 }
@@ -400,6 +407,9 @@ int kretprobe__inet_csk_accept(struct pt_regs* ctx) {
         return 0;
     }
     handle_tcp_stats(&t, sk);
+    if (t.sport == 22) {
+        write_map_tags(&t, 1, 0, "SSH_SERVER", sizeof("SSH_SERVER"));
+    }
     handle_message(&t, 0, 0, CONN_DIRECTION_INCOMING, 0, 0, PACKET_COUNT_NONE);
 
     port_binding_t pb = {};
