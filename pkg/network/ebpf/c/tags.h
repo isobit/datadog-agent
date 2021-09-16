@@ -10,7 +10,7 @@ static __always_inline tags_t * conn_map_tags(conn_tuple_t *t) {
     // initialize-if-no-exist the connection tags, and load it
     tags_t empty = { 0 };
     if (bpf_map_update_elem(&conn_tags, t, &empty, BPF_NOEXIST) == -E2BIG) {
-        //TODO : increment_telemetry_count(conn_tags_max_entries_hit);
+        increment_telemetry_count(conn_tags_max_entries_hit);
     }
     return bpf_map_lookup_elem(&conn_tags, t);
 }

@@ -297,6 +297,7 @@ func (t *kprobeTracer) GetTelemetry() map[string]int64 {
 		"udp_sends_processed":        int64(telemetry.Udp_sends_processed),
 		"udp_sends_missed":           int64(telemetry.Udp_sends_missed),
 		"conn_stats_max_entries_hit": int64(telemetry.Conn_stats_max_entries_hit),
+		"conn_tags_max_entries_hit":  int64(telemetry.Conn_tags_max_entries_hit),
 	}
 }
 
