@@ -52,5 +52,8 @@ const (
 const BatchSize = C.CONN_CLOSED_BATCH_SIZE
 
 var (
-	StaticTagsStrings = [...]string{"NoTags", "HTTP", "LIBSSL"}
+	StaticTags = map[uint64]string{
+		C.HTTP:   "HTTP",
+		C.LIBSSL: "LIBSSL",
+	}
 )

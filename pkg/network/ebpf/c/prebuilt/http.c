@@ -5,7 +5,7 @@
 #include "http.h"
 #include "sock.h"
 #include "sockfd.h"
-//#include "tags.h"
+#include "tags.h"
 
 // TODO: Replace those by injected constants based on system configuration
 // once we have port range detection merged into the codebase.
@@ -56,7 +56,7 @@ int socket__http_filter(struct __sk_buff* skb) {
     char buffer[HTTP_BUFFER_SIZE];
     __builtin_memset(buffer, 0, sizeof(buffer));
     read_skb_data(skb, skb_info.data_off, buffer);
-//    add_tags_tuple(&skb_info.tup, 1, HTTP);
+    add_tags_tuple(&skb_info.tup, HTTP);
     http_process(buffer, &skb_info, src_port);
     return 0;
 }
@@ -191,7 +191,7 @@ int uretprobe__SSL_read(struct pt_regs* ctx) {
 
     skb_info_t skb_info = {0};
     __builtin_memcpy(&skb_info.tup, t, sizeof(conn_tuple_t));
-//    add_tags_tuple(&skb_info.tup, 1, LIBSSL);
+    add_tags_tuple(&skb_info.tup, LIBSSL);
     http_process(buffer, &skb_info, skb_info.tup.sport);
  cleanup:
     bpf_map_delete_elem(&ssl_read_args, &pid_tgid);
@@ -217,7 +217,7 @@ int uprobe__SSL_write(struct pt_regs* ctx) {
 
     skb_info_t skb_info = {0};
     __builtin_memcpy(&skb_info.tup, t, sizeof(conn_tuple_t));
-//    add_tags_tuple(&skb_info.tup, 1, LIBSSL);
+    add_tags_tuple(&skb_info.tup, LIBSSL);
     http_process(buffer, &skb_info, skb_info.tup.sport);
     return 0;
 }

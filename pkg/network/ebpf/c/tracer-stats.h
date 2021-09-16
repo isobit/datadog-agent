@@ -26,21 +26,18 @@ static __always_inline void update_conn_state(conn_tuple_t *t, conn_stats_ts_t *
     }
 }
 
-static __always_inline conn_stats_ts_t * get_conn_stats(conn_tuple_t *t) {
+static __always_inline void update_conn_stats(conn_tuple_t *t, size_t sent_bytes, size_t recv_bytes, u64 ts, conn_direction_t dir,
+                                              __u32 packets_out, __u32 packets_in, packet_count_increment_t segs_type) {
+    conn_stats_ts_t *val;
+
     // initialize-if-no-exist the connection stat, and load it
     conn_stats_ts_t empty = {};
     __builtin_memset(&empty, 0, sizeof(conn_stats_ts_t));
     if (bpf_map_update_elem(&conn_stats, t, &empty, BPF_NOEXIST) == -E2BIG) {
         increment_telemetry_count(conn_stats_max_entries_hit);
     }
-    return bpf_map_lookup_elem(&conn_stats, t);
-}
+    val = bpf_map_lookup_elem(&conn_stats, t);
 
-static __always_inline void update_conn_stats(conn_tuple_t *t, size_t sent_bytes, size_t recv_bytes, u64 ts, conn_direction_t dir,
-                                              __u32 packets_out, __u32 packets_in, packet_count_increment_t segs_type) {
-    conn_stats_ts_t *val;
-
-    val = get_conn_stats(t);
     if (!val) {
         return;
     }

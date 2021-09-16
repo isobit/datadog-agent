@@ -37,8 +37,6 @@ static __always_inline void cleanup_conn(conn_tuple_t *tup) {
 
         conn.tcp_stats.state_transitions |= (1 << TCP_CLOSE);
     }
-    // Delete our tags
-    bpf_map_delete_elem(&conn_tags, &(conn.tup));
 
     cst = bpf_map_lookup_elem(&conn_stats, &(conn.tup));
     // Delete this connection from our stats map

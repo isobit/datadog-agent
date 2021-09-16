@@ -6,16 +6,15 @@
 // dynamic tags
 #define TAGS_MAX_LENGTH 16
 
-// value of the tags map
 typedef struct {
+    conn_tuple_t tup;
     __u8 value[TAGS_MAX_LENGTH];
 } tags_t;
 
-// static tags are limited to 255
+// static tags limited to 64 tags per unique connection
 enum static_tags {
-    NOTAGS = 0,
-    HTTP = 1,
-    LIBSSL = 2,
+    HTTP = (1<<0),
+    LIBSSL = (1<<1),
 };
 
 #endif

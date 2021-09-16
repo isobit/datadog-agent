@@ -41,6 +41,7 @@ func (ipc ipCache) Get(addr util.Address) string {
 func FormatConnection(
 	conn network.ConnectionStats,
 	routes map[string]RouteIdx,
+	tagsSet map[string]int32,
 	httpStats *model.HTTPAggregations,
 	dnsFormatter *dnsFormatter,
 	ipc ipCache,
@@ -65,6 +66,7 @@ func FormatConnection(
 	c.Rtt = conn.RTT
 	c.RttVar = conn.RTTVar
 	c.IntraHost = conn.IntraHost
+	c.Tags = conn.Tags
 	c.LastTcpEstablished = conn.LastTCPEstablished
 	c.LastTcpClosed = conn.LastTCPClosed
 	c.Tags = conn.Tags

@@ -6,9 +6,9 @@
 /* This is a key/value store with the keys being a conn_tuple_t, the values being tags_t.
  */
 struct bpf_map_def SEC("maps/conn_tags") conn_tags = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(conn_tuple_t),
-    .value_size = sizeof(tags_t),
+    .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
+    .key_size = sizeof(__u32),
+    .value_size = sizeof(__u32),
     .max_entries = 0, // This will get overridden at runtime using max_tracked_connections
     .pinning = 0,
     .namespace = "",

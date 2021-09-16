@@ -1,3 +1,4 @@
+//go:build linux_bpf
 // +build linux_bpf
 
 package kprobe
@@ -27,12 +28,15 @@ const (
 	defaultClosedChannelSize = 500
 )
 
+type TagFunc func(tag *network.TagsSet, conn *network.ConnectionStats)
+
 type kprobeTracer struct {
 	m *manager.Manager
 
 	conns    *ebpf.Map
 	tcpStats *ebpf.Map
 	tags     *ebpf.Map
+	tagFunc  TagFunc
 	config   *config.Config
 
 	// tcp_close events
@@ -202,7 +206,18 @@ func (t *kprobeTracer) GetMap(name string) *ebpf.Map {
 	}
 }
 
-func (t *kprobeTracer) GetConnections(buffer *network.ConnectionBuffer, filter func(*network.ConnectionStats) bool) (network.Tags, error) {
+// RegisterConnectionsTagFunc register a callback that will be called on selected ConnectionStats from GetConnections()
+// the callback can add tag to the connections, like :
+//   callback(tags, conn) {
+//     if conn.DPort == 80 {
+//       tags.Tag(conn, "scheme:http:client")
+//     }
+//   }
+func (t *kprobeTracer) RegisterConnectionsTagFunc(callback TagFunc) {
+	t.tagFunc = callback
+}
+
+func (t *kprobeTracer) GetConnections(buffer *network.ConnectionBuffer, filter func(*network.ConnectionStats) bool) (*network.TagsSet, error) {
 	// Iterate through all key-value pairs in map
 	key, stats := &netebpf.ConnTuple{}, &netebpf.ConnStats{}
 	seen := make(map[netebpf.ConnTuple]struct{})
@@ -210,6 +225,7 @@ func (t *kprobeTracer) GetConnections(buffer *network.ConnectionBuffer, filter f
 	// Cached objects
 	conn := new(network.ConnectionStats)
 	tcp := new(netebpf.TCPStats)
+	tagsSet := network.NewTagsSet()
 
 	entries := t.conns.IterateFrom(unsafe.Pointer(&netebpf.ConnTuple{}))
 	for entries.Next(unsafe.Pointer(key), unsafe.Pointer(stats)) {
@@ -217,7 +233,7 @@ func (t *kprobeTracer) GetConnections(buffer *network.ConnectionBuffer, filter f
 		if filter != nil && !filter(conn) {
 			continue
 		}
-		conn.Tags = append(conn.Tags, tagsSet.getIndexes(key)...)
+		conn.Tags = append(conn.Tags, tagsSet.Add(key))
 		if t.getTCPStats(tcp, key, seen) {
 			updateTCPStats(conn, tcp)
 		}
@@ -228,7 +244,7 @@ func (t *kprobeTracer) GetConnections(buffer *network.ConnectionBuffer, filter f
 		return nil, fmt.Errorf("unable to iterate connection map: %s", err)
 	}
 
-	return tagsSet.getTagsStrings(), nil
+	return tagsSet.GetTagsStrings(), nil
 }
 
 func (t *kprobeTracer) Remove(conn *network.ConnectionStats) error {
