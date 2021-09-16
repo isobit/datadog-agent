@@ -264,6 +264,7 @@ func (t *kprobeTracer) Remove(conn *network.ConnectionStats) error {
 	t.removeTuple.Pid = 0
 	// We can ignore the error for this map since it will not always contain the entry
 	_ = t.tcpStats.Delete(unsafe.Pointer(t.removeTuple))
+	_ = t.tags.Delete(unsafe.Pointer(t.removeTuple))
 
 	return nil
 }
