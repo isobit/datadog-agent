@@ -133,6 +133,7 @@ type composeRequest struct {
 	value               uint64
 }
 
+// CreateConstantEditors creates constant editors based on the constants fetched
 func CreateConstantEditors(kv *kernel.Version, constants map[string]uint64) []manager.ConstantEditor {
 	res := make([]manager.ConstantEditor, 0, len(constants))
 
