@@ -5,7 +5,7 @@
 
 // +build linux,linux_bpf
 
-package probe
+package constantfetch
 
 import (
 	"bytes"
