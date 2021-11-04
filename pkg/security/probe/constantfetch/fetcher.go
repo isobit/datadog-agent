@@ -12,7 +12,6 @@ import (
 	"hash"
 	"io"
 
-	"github.com/DataDog/datadog-agent/pkg/security/ebpf/kernel"
 	"github.com/DataDog/datadog-agent/pkg/security/log"
 	manager "github.com/DataDog/ebpf-manager"
 )
@@ -84,7 +83,6 @@ func (f *ComposeConstantFetcher) getHash() []byte {
 func (f *ComposeConstantFetcher) FinishAndGetResults() (map[string]uint64, error) {
 	currentHash := f.getHash()
 	if constantsCache.isMatching(currentHash) {
-		log.Warnf("cached hit")
 		return constantsCache.constants, nil
 	}
 
@@ -134,18 +132,13 @@ type composeRequest struct {
 }
 
 // CreateConstantEditors creates constant editors based on the constants fetched
-func CreateConstantEditors(kv *kernel.Version, constants map[string]uint64) []manager.ConstantEditor {
+func CreateConstantEditors(constants map[string]uint64) []manager.ConstantEditor {
 	res := make([]manager.ConstantEditor, 0, len(constants))
-
-	log.Warnf("kernel version: %v", kv)
-
 	for name, value := range constants {
 		if value == errorSentinel {
-			log.Warnf("failed to fetch constant for %s", name)
+			log.Errorf("failed to fetch constant for %s", name)
 			value = 0
 		}
-
-		log.Warnf("constant %s = %v", name, value)
 
 		res = append(res, manager.ConstantEditor{
 			Name:  name,
