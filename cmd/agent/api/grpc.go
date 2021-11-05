@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -35,6 +36,7 @@ import (
 
 const (
 	taggerStreamSendTimeout = 1 * time.Minute
+	retrySleepDuration      = 3 * time.Second
 )
 
 type server struct {
@@ -198,6 +200,13 @@ func (s *serverSecure) GetConfigs(ctx context.Context, in *pb.GetConfigsRequest)
 		return nil, errors.New("remote configuration service not initialized")
 	}
 
+	if in.TracerInfo != nil {
+		err := s.configService.TracerInfos.AddTracer(in.TracerInfo)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	configs, err := s.configService.GetConfigs(in.Product.String())
 	if err != nil {
 		return nil, err
@@ -208,43 +217,80 @@ func (s *serverSecure) GetConfigs(ctx context.Context, in *pb.GetConfigsRequest)
 	}, nil
 }
 
-func (s *serverSecure) GetConfigUpdates(in *pb.SubscribeConfigRequest, out pb.AgentSecure_GetConfigUpdatesServer) error {
+func (s *serverSecure) GetConfigUpdates(channel pb.AgentSecure_GetConfigUpdatesServer) error {
 	if s.configService == nil {
 		log.Debug("Remote configuration service not initialized")
 		return errors.New("remote config service not initialized")
 	}
 
-	ctx := out.Context()
+	ctx := channel.Context()
 	configs := make(chan *pb.ConfigResponse, 1)
+	reqs := make(chan *pb.SubscribeConfigRequest, 1)
 
-	log.Debugf("New remote configuration subscriber request for product %s", in.Product)
-	subscriber := remoteconfig.NewSubscriber(in.Product, time.Second, func(config *pb.ConfigResponse) error {
-		log.Debug("Pushing configuration for gRPC client")
+	go s.listenReqs(ctx, channel, reqs)
+	go s.sendConfigs(ctx, channel, configs)
+
+	for {
 		select {
-		case configs <- config:
-			log.Debug("Pushed configuration to gRPC client")
+		case req := <-reqs:
+			if !s.configService.HasSubscriber(req.Product) {
+				log.Debugf("New remote configuration subscriber request for product %s", req.Product)
+				subscriber := remoteconfig.NewChanSubscriber(req.Product, time.Second, configs)
+				log.Debugf("New remote configuration subscriber for product %s", req.Product)
+				s.configService.RegisterSubscriber(subscriber)
+				defer s.configService.UnregisterSubscriber(subscriber)
+			}
+		case <-ctx.Done():
+			log.Info("Unsubscribing gRPC client")
 			return nil
-		default:
-			return errors.New("failed to notify gRPC subscriber")
 		}
-	})
+	}
+}
 
-	log.Debugf("New remote configuration subscriber for product %s", in.Product)
-	s.configService.RegisterSubscriber(subscriber)
-	defer s.configService.UnregisterSubscriber(subscriber)
-
+func (s *serverSecure) sendConfigs(ctx context.Context, channel pb.AgentSecure_GetConfigUpdatesServer, configs chan *pb.ConfigResponse) {
 	for {
 		log.Debug("Streaming config to gRPC client")
 		select {
 		case config := <-configs:
-			log.Debugf("Sending configuration for product %s", in.Product)
-			if err := out.Send(config); err != nil {
+			log.Debug("Sending configuration")
+			if err := channel.Send(config); err != nil {
 				log.Errorf("error sending config event: %s", err)
-				return nil
+				time.Sleep(retrySleepDuration)
+				continue
 			}
 		case <-ctx.Done():
-			log.Infof("Unsubscribing gRPC client for product %s", in.Product)
-			return nil
+			log.Info("Unsubscribing gRPC client")
+			return
+		}
+	}
+}
+
+func (s *serverSecure) listenReqs(ctx context.Context, channel pb.AgentSecure_GetConfigUpdatesServer, reqs chan *pb.SubscribeConfigRequest) {
+	log.Debug("Starting to listen for subscribe config requests")
+	for {
+		req, err := channel.Recv()
+		if err == io.EOF {
+			continue
+		} else if err != nil {
+			log.Errorf("Error receiving config request: %s", err)
+		}
+
+		log.Debug("Adding subscribe config request")
+		reqs <- req
+
+		if req != nil && req.TracerInfo != nil {
+			err := s.configService.TracerInfos.AddTracer(req.TracerInfo)
+			if err != nil {
+				log.Errorf("Error sending tracer info: %s", err)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			log.Info("Done listening for subscribe config requests")
+			return
+		default:
+			continue
 		}
 	}
 }
