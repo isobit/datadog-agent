@@ -27,7 +27,6 @@ var (
 	archFlag              = flag.String("arch", "", "list of Go architectures")
 	packageFlag           = flag.String("package", "", "package to use when generating source")
 	sharedBuildDirFlag    = flag.String("shared-build-dir", "", "shared directory to cache Go versions")
-	outDirFlag            = flag.String("out-dir", "", "folder to store output binaries produced during lookup table generation")
 )
 
 // This program is intended to be called from go generate.
@@ -76,7 +75,7 @@ func main() {
 		}
 	}()
 
-	err = run(ctx, outputFile, minGoVersion, goArches, *packageFlag, *testProgramFlag, *sharedBuildDirFlag, *outDirFlag, maxQuickGoVersion)
+	err = run(ctx, outputFile, minGoVersion, goArches, *packageFlag, *testProgramFlag, *sharedBuildDirFlag, maxQuickGoVersion)
 	if err != nil {
 		log.Fatalf("error generating lookup table: %s", err)
 	}
@@ -92,7 +91,6 @@ func run(
 	pkg string,
 	testProgramPath string,
 	sharedBuildDir string,
-	outDir string,
 	maxQuickGoVersion *goversion.GoVersion,
 ) error {
 	if err := os.MkdirAll(filepath.Dir(outputFile), 0755); err != nil {
@@ -104,6 +102,13 @@ func run(
 		return err
 	}
 	defer f.Close()
+
+	// Create a temp directory for the output files
+	outDir, err := os.MkdirTemp("", "goid_lut_out_*")
+	if err != nil {
+		return fmt.Errorf("error creating temp out dir: %w", err)
+	}
+	defer os.RemoveAll(outDir)
 
 	generator := &lutgen.LookupTableGenerator{
 		Package:                pkg,
