@@ -194,7 +194,7 @@ func (g *LookupTableGenerator) getCommand(ctx context.Context, version goversion
 		Architecture:    arch,
 	})
 
-	return exec.CommandContext(
+	command := exec.CommandContext(
 		ctx,
 		"go",
 		"build",
@@ -203,6 +203,18 @@ func (g *LookupTableGenerator) getCommand(ctx context.Context, version goversion
 		"--",
 		g.TestProgramPath,
 	)
+
+	// Set the GOPATH and GOCACHE variables.
+	// Make sure to resolve the absolute path of install directory first.
+	installDirectoryAbs, err := filepath.Abs(g.InstallDirectory)
+	if err != nil {
+		log.Printf("error install directory at %q: %v", g.InstallDirectory, err)
+		return nil
+	}
+	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "GOPATH", filepath.Join(installDirectoryAbs, "build-gopath")))
+	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "GOCACHE", filepath.Join(installDirectoryAbs, "build-gocache")))
+
+	return command
 }
 
 // createFakeGoMod creates the go.mod file that the `go build` command should use

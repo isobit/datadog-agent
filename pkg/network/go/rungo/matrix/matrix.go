@@ -199,7 +199,7 @@ func (r *Runner) runSingleCommand(ctx context.Context, goExe string, version gov
 
 	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "GOARCH", arch))
 	// The $HOME directory needs to be set to the Go installation directory
-	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "HOME", r.makeInstallation(version).InstallLocation))
+	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "HOME", r.getInstallLocation(version)))
 	command.Path = goExe
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -218,10 +218,14 @@ func (r *Runner) runSingleCommand(ctx context.Context, goExe string, version gov
 func (r *Runner) makeInstallation(version goversion.GoVersion) rungo.GoInstallation {
 	return rungo.GoInstallation{
 		Version:         versionToString(version),
-		InstallGopath:   filepath.Join(r.InstallDirectory, "path"),
-		InstallGocache:  filepath.Join(r.InstallDirectory, "cache"),
-		InstallLocation: filepath.Join(r.InstallDirectory, "go"),
+		InstallGopath:   filepath.Join(r.InstallDirectory, "install-gopath"),
+		InstallGocache:  filepath.Join(r.InstallDirectory, "install-gocache"),
+		InstallLocation: r.getInstallLocation(version),
 	}
+}
+
+func (r *Runner) getInstallLocation(version goversion.GoVersion) string {
+	return filepath.Join(r.InstallDirectory, "install")
 }
 
 func getCombinations(versions []goversion.GoVersion, architectures []string) []architectureVersion {
