@@ -43,6 +43,11 @@ func (f *LookupFunction) argsFromResultTable(resultTable map[architectureVersion
 	valueTable := f.convertResultToValueTable(resultTable)
 	architectureValueSets := f.binArchitectures(valueTable)
 
+	// Sort the list of architecture cases so that the output is deterinstic
+	sort.Slice(architectureValueSets, func(i, j int) bool {
+		return architectureValueSets[i].arch < architectureValueSets[j].arch
+	})
+
 	// For each architecture case,
 	// prepare its template args by compressing the lookup tables to unique values.
 	archCaseArgs := []archCaseTemplateArgs{}
