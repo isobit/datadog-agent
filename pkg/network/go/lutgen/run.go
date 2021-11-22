@@ -178,6 +178,12 @@ func (g *LookupTableGenerator) getCommand(ctx context.Context, version goversion
 	versionStr := versionToString(version)
 	outPath := filepath.Join(g.OutDirectory, fmt.Sprintf("%s.go%s", arch, versionStr))
 
+	modFile, err := g.createFakeGoMod(version, arch)
+	if err != nil {
+		log.Printf("error creating go.mod file for (Go version, arch pair) (go%s, %s): %v", versionStr, arch, err)
+		return nil
+	}
+
 	// Store the binary struct in a list so that it can later be opened.
 	// If the command ends up failing, this will be ignored
 	// and the entire lookup table generation will exit early.
@@ -188,7 +194,36 @@ func (g *LookupTableGenerator) getCommand(ctx context.Context, version goversion
 		Architecture:    arch,
 	})
 
-	return exec.CommandContext(ctx, "go", "build", "-o", outPath, "--", g.TestProgramPath)
+	return exec.CommandContext(
+		ctx,
+		"go",
+		"build",
+		"-o", outPath,
+		"-modfile", modFile,
+		"--",
+		g.TestProgramPath,
+	)
+}
+
+// createFakeGoMod creates the go.mod file that the `go build` command should use
+// when compiling the test program.
+// This is needed to prevent the test program compilation from using the
+// `go.mod` file in the root of this repository.
+func (g *LookupTableGenerator) createFakeGoMod(version goversion.GoVersion, arch string) (string, error) {
+	path := filepath.Join(g.OutDirectory, fmt.Sprintf("%s.go%s.go.mod", arch, versionToString(version)))
+
+	f, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("error creating file at %q: %w", path, err)
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(fmt.Sprintf("module test_program\n\ngo %d.%d\n", version.Major, version.Minor))
+	if err != nil {
+		return "", fmt.Errorf("error writing contents: %w", err)
+	}
+
+	return path, nil
 }
 
 // inspectAllBinaries runs the inspection function for each binary in parallel,
