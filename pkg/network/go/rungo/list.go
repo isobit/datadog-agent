@@ -1,26 +1,26 @@
 package rungo
 
 import (
-	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
+	"strings"
 )
 
-// This is the main Golang version download page.
-// It contains a bunch of HTML, which has to be grepped through,
-// but this is the same approach that Gimme uses:
-// https://github.com/travis-ci/gimme
-// https://github.com/travis-ci/gimme/blob/31ad563474d6ee1dabdabe1d1d2bbdeb6444fd92/gimme#L542
-const goVersionListURL string = "https://golang.org/dl"
+// This URL contains a list of all Go versions
+// https://pkg.go.dev/golang.org/x/website/internal/dl
+const goVersionListURL string = "https://go.dev/dl/?mode=json&include=all"
 
-var goVersionRegex *regexp.Regexp = regexp.MustCompile(`go([A-Za-z0-9.]*)\.src`)
+type goRelease struct {
+	Version string `json:"version"`
+}
 
 // Gets a list of all current Go versions by downloading the Golang download page
 // and scanning it for Go versions.
 // Includes beta and RC versions, as well as normal point releases.
 // See https://golang.org/dl (all versions are listed under "Archived versions")
+// or https://go.dev/dl/?mode=json&include=all
 func ListGoVersions(ctx context.Context) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", goVersionListURL, nil)
 	if err != nil {
@@ -34,32 +34,22 @@ func ListGoVersions(ctx context.Context) ([]string, error) {
 
 	defer resp.Body.Close()
 
-	// Read in the body line by line, and use the regex on each line.
-	// We probably could read in the entire page to a buffer;
-	// as of 2021-11-15, it's about 1 MiB.
-	// However, there are a multitude of line breaks
-	// at natural locations, so it's just easier to do that.
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Split(bufio.ScanLines)
-	allVersionsSet := make(map[string]struct{})
-	for scanner.Scan() {
-		matches := goVersionRegex.FindAllStringSubmatch(scanner.Text(), -1)
-		for _, groups := range matches {
-			version := groups[1]
-			allVersionsSet[version] = struct{}{}
-		}
+	// Parse the body as a slice of shallow release structs
+	// The full shape is at:
+	// https://pkg.go.dev/golang.org/x/website/internal/dl#Release
+	// but we're only interested in the version field.
+	releases := []goRelease{}
+	err = json.NewDecoder(resp.Body).Decode(&releases)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding response from %s as JSON: %w", goVersionListURL, err)
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error scanning response from %s: %w", goVersionListURL, err)
+	// Flatten the list of structs to a list of versions,
+	// and remove the leading "go" from the version strings.
+	versions := make([]string, len(releases))
+	for i := range releases {
+		versions[i] = strings.TrimPrefix(releases[i].Version, "go")
 	}
 
-	i := 0
-	allVersions := make([]string, len(allVersionsSet))
-	for v := range allVersionsSet {
-		allVersions[i] = v
-		i += 1
-	}
-
-	return allVersions, nil
+	return versions, nil
 }
