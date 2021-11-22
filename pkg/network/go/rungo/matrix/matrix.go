@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/go-delve/delve/pkg/goversion"
 
@@ -64,6 +65,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		r.InstallDirectory = abs
 	}
 
+	// First, install all Go toolchain versions
+	// to produce a map of go version -> "go" binary path
+	executables, err := r.installAllVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("error while installing Go toolchains for matrix runner: %w", err)
+	}
+
 	combinations := getCombinations(r.Versions, r.Architectures)
 	if len(combinations) == 0 {
 		// Nothing to run
@@ -82,7 +90,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	for i := 0; i < r.Parallelism; i++ {
 		go func() {
 			for j := range jobs {
-				err := r.runSingleCommand(cancellableContext, j.version, j.architecture)
+				err := r.runSingleCommand(cancellableContext, executables[j.version], j.version, j.architecture)
 				results <- struct {
 					version architectureVersion
 					err     error
@@ -112,14 +120,58 @@ func (r *Runner) Run(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) runSingleCommand(ctx context.Context, version goversion.GoVersion, arch string) error {
-	versionStr := versionToString(version)
-	command := r.GetCommand(ctx, version, arch)
-	if command == nil {
-		// Allow the GetCommand implementation to skip a version/arch combination
-		return nil
+func (r *Runner) installAllVersions(ctx context.Context) (map[goversion.GoVersion]string, error) {
+	jobs := make(chan goversion.GoVersion, len(r.Versions))
+	results := make(chan struct {
+		version goversion.GoVersion
+		exe     string
+		err     error
+	})
+
+	cancellableContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for i := 0; i < r.Parallelism; i++ {
+		go func() {
+			for j := range jobs {
+				exe, err := r.installSingleVersion(cancellableContext, j)
+				results <- struct {
+					version goversion.GoVersion
+					exe     string
+					err     error
+				}{j, exe, err}
+			}
+		}()
 	}
 
+	for _, job := range r.Versions {
+		jobs <- job
+	}
+	close(jobs)
+
+	exeLocations := make(map[goversion.GoVersion]string)
+	var exeLocationsMu sync.Mutex
+	for range r.Versions {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				// Bail early and return
+				cancel()
+				return nil, result.err
+			}
+			exeLocationsMu.Lock()
+			exeLocations[result.version] = result.exe
+			exeLocationsMu.Unlock()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	return exeLocations, nil
+}
+
+func (r *Runner) installSingleVersion(ctx context.Context, version goversion.GoVersion) (string, error) {
+	versionStr := versionToString(version)
 	installation := r.makeInstallation(version)
 	goExe, errOutput, err := installation.Install(ctx)
 	if err != nil {
@@ -127,16 +179,27 @@ func (r *Runner) runSingleCommand(ctx context.Context, version goversion.GoVersi
 			// Dump the output of the subprocess
 			scanner := bufio.NewScanner(bytes.NewReader(errOutput))
 			for scanner.Scan() {
-				fmt.Printf("[%s-%s-install] %s\n", versionStr, arch, scanner.Text())
+				fmt.Printf("[%s--install] %s\n", versionStr, scanner.Text())
 			}
 		}
 
-		return fmt.Errorf("error while installing Go toolchain version %s: %w", versionStr, err)
+		return "", fmt.Errorf("error while installing Go toolchain version %s: %w", versionStr, err)
+	}
+
+	return goExe, nil
+}
+
+func (r *Runner) runSingleCommand(ctx context.Context, goExe string, version goversion.GoVersion, arch string) error {
+	versionStr := versionToString(version)
+	command := r.GetCommand(ctx, version, arch)
+	if command == nil {
+		// Allow the GetCommand implementation to skip a version/arch combination
+		return nil
 	}
 
 	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "GOARCH", arch))
 	// The $HOME directory needs to be set to the Go installation directory
-	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "HOME", installation.InstallLocation))
+	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "HOME", r.makeInstallation(version).InstallLocation))
 	command.Path = goExe
 	output, err := command.CombinedOutput()
 	if err != nil {
