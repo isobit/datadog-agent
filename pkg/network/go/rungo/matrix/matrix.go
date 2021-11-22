@@ -1,0 +1,183 @@
+package matrix
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"os/exec"
+	"path/filepath"
+
+	"github.com/go-delve/delve/pkg/goversion"
+
+	"github.com/DataDog/datadog-agent/pkg/network/go/rungo"
+)
+
+type Runner struct {
+	// The number of single architecture-version runners that are active at any time.
+	Parallelism int
+	// List of Go versions to run commands on.
+	// These should all be non-beta/RC versions.
+	Versions []goversion.GoVersion
+	// List of Go architectures (values for GOARCH) to run commands on.
+	Architectures []string
+	// The root directory that the matrix runner should use to install the Go tooclahin versions.
+	InstallDirectory string
+	// Constructs the command to run for the single architecture-version runner.
+	// The implementation should use `exec.CommandContext` and pass in the supplied context
+	// to ensure that the command is cancelled if the runner exits early.
+	// The GOARCH environment variable is automatically injected with the appropriate value.
+	// Additionally, the value of `Path` is ignored
+	// and replaced with the path to the installed Go binary.
+	// Finally, due to a quirk with how the toolchain install path is resolved,
+	// the HOME environment variable is replaced with a synthetic value.
+	//
+	// To skip a version-architecture pair, return `nil` for this function.
+	GetCommand func(ctx context.Context, version goversion.GoVersion, arch string) *exec.Cmd
+}
+
+type architectureVersion struct {
+	architecture string
+	version      goversion.GoVersion
+}
+
+// Run runs the matrix runner to completion,
+// exiting early (and dumping the output) if any of the individual commands fail.
+// Otherwise, it runs a command for every combination of Go version and architecture.
+func (r *Runner) Run(ctx context.Context) error {
+	if r.Parallelism <= 0 {
+		return fmt.Errorf("cannot run with negative/zero Parallelism (%d)", r.Parallelism)
+	}
+	if r.GetCommand == nil {
+		return fmt.Errorf("GetCommand is required")
+	}
+	if r.InstallDirectory == "" {
+		return fmt.Errorf("InstallDirectory is required")
+	}
+
+	// If the install directory is not absolute, resolve it
+	if !filepath.IsAbs(r.InstallDirectory) {
+		abs, err := filepath.Abs(r.InstallDirectory)
+		if err != nil {
+			return fmt.Errorf("could not resolve absolute path of install directory %q: %w", r.InstallDirectory, err)
+		}
+		r.InstallDirectory = abs
+	}
+
+	combinations := getCombinations(r.Versions, r.Architectures)
+	if len(combinations) == 0 {
+		// Nothing to run
+		return nil
+	}
+
+	jobs := make(chan architectureVersion, len(combinations))
+	results := make(chan struct {
+		version architectureVersion
+		err     error
+	})
+
+	cancellableContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for i := 0; i < r.Parallelism; i++ {
+		go func() {
+			for j := range jobs {
+				err := r.runSingleCommand(cancellableContext, j.version, j.architecture)
+				results <- struct {
+					version architectureVersion
+					err     error
+				}{j, err}
+			}
+		}()
+	}
+
+	for _, job := range combinations {
+		jobs <- job
+	}
+	close(jobs)
+
+	for range combinations {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				// Bail early and return
+				cancel()
+				return result.err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return nil
+}
+
+func (r *Runner) runSingleCommand(ctx context.Context, version goversion.GoVersion, arch string) error {
+	versionStr := versionToString(version)
+	command := r.GetCommand(ctx, version, arch)
+	if command == nil {
+		// Allow the GetCommand implementation to skip a version/arch combination
+		return nil
+	}
+
+	installation := r.makeInstallation(version)
+	goExe, errOutput, err := installation.Install(ctx)
+	if err != nil {
+		if errOutput != nil {
+			// Dump the output of the subprocess
+			scanner := bufio.NewScanner(bytes.NewReader(errOutput))
+			for scanner.Scan() {
+				fmt.Printf("[%s-%s-install] %s\n", versionStr, arch, scanner.Text())
+			}
+		}
+
+		return fmt.Errorf("error while installing Go toolchain version %s: %w", versionStr, err)
+	}
+
+	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "GOARCH", arch))
+	// The $HOME directory needs to be set to the Go installation directory
+	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "HOME", installation.InstallLocation))
+	command.Path = goExe
+	output, err := command.CombinedOutput()
+	if err != nil {
+		// Dump the output of the subprocess
+		scanner := bufio.NewScanner(bytes.NewReader(output))
+		for scanner.Scan() {
+			fmt.Printf("[%s-%s] %s\n", versionStr, arch, scanner.Text())
+		}
+
+		return fmt.Errorf("error while running command for (Go version, arch pair) (go%s, %s): %w", versionStr, arch, err)
+	}
+
+	return nil
+}
+
+func (r *Runner) makeInstallation(version goversion.GoVersion) rungo.GoInstallation {
+	return rungo.GoInstallation{
+		Version:         versionToString(version),
+		InstallGopath:   filepath.Join(r.InstallDirectory, "path"),
+		InstallGocache:  filepath.Join(r.InstallDirectory, "cache"),
+		InstallLocation: filepath.Join(r.InstallDirectory, "go"),
+	}
+}
+
+func getCombinations(versions []goversion.GoVersion, architectures []string) []architectureVersion {
+	i := 0
+	combinations := make([]architectureVersion, len(versions)*len(architectures))
+	for _, v := range versions {
+		for _, a := range architectures {
+			combinations[i] = architectureVersion{architecture: a, version: v}
+			i += 1
+		}
+	}
+
+	return combinations
+}
+
+func versionToString(v goversion.GoVersion) string {
+	if v.Rev == 0 {
+		return fmt.Sprintf("%d.%d", v.Major, v.Minor)
+	} else {
+		return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Rev)
+	}
+}
