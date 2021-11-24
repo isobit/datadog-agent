@@ -3,9 +3,6 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
 // Copyright 2016-present Datadog, Inc.
 
-//go:build docker && !darwin
-// +build docker,!darwin
-
 package docker
 
 import (
@@ -20,14 +17,17 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/autodiscovery/integration"
 	"github.com/DataDog/datadog-agent/pkg/collector/check"
 	core "github.com/DataDog/datadog-agent/pkg/collector/corechecks"
-	"github.com/DataDog/datadog-agent/pkg/metrics"
+	"github.com/DataDog/datadog-agent/pkg/collector/corechecks/containers/generic"
 	"github.com/DataDog/datadog-agent/pkg/tagger"
 	"github.com/DataDog/datadog-agent/pkg/tagger/collectors"
 	"github.com/DataDog/datadog-agent/pkg/util"
 	"github.com/DataDog/datadog-agent/pkg/util/containers"
 	cmetrics "github.com/DataDog/datadog-agent/pkg/util/containers/metrics"
+	"github.com/DataDog/datadog-agent/pkg/util/containers/v2/metrics"
 	"github.com/DataDog/datadog-agent/pkg/util/docker"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
+	"github.com/DataDog/datadog-agent/pkg/workloadmeta"
+	"github.com/moby/moby/api/types"
 )
 
 const dockerCheckName = "docker"
@@ -42,89 +42,113 @@ type containerPerImage struct {
 type DockerCheck struct {
 	core.CheckBase
 	instance                    *DockerConfig
+	processor                   generic.Processor
 	lastEventTime               time.Time
 	dockerHostname              string
-	cappedSender                *cappedSender
 	collectContainerSizeCounter uint64
 	containerFilter             *containers.Filter
 	okExitCodes                 map[int]struct{}
 }
 
-func updateContainerRunningCount(images map[string]*containerPerImage, c *containers.Container) {
-	var containerTags []string
-	var err error
+func init() {
+	core.RegisterCheck("docker", DockerFactory)
+}
 
-	// Containers that are not running (either pending or stopped) are not
-	// collected by the tagger, so they won't have any tags and will cause
-	// an expensive tagger fetch.  To have *some* tags for stopped
-	// containers, we treat them as excluded containers and make a
-	// synthetic list of tags from basic container information.
-	if c.Excluded || c.State != containers.ContainerRunningState {
-		// TODO we can do SplitImageName because we are in the docker corecheck and the image name is not a sha[...]
-		// We should resolve the image tags in the tagger as a real entity.
-		long, short, tag, err := containers.SplitImageName(c.Image)
-		if err != nil {
-			log.Errorf("Cannot split the image name %s: %v", c.Image, err)
-			return
-		}
-		containerTags = []string{
-			fmt.Sprintf("docker_image:%s", c.Image),
-			fmt.Sprintf("image_name:%s", long),
-			fmt.Sprintf("image_tag:%s", tag),
-			fmt.Sprintf("short_image:%s", short),
-		}
-	} else {
-		containerTags, err = tagger.Tag(c.EntityID, collectors.LowCardinality)
-		if err != nil {
-			log.Errorf("Could not collect tags for container %s: %s", c.ID[:12], err)
-			return
-		}
-		sort.Strings(containerTags)
-	}
-
-	key := strings.Join(containerTags, "|")
-	if _, found := images[key]; !found {
-		images[key] = &containerPerImage{tags: containerTags, running: 0, stopped: 0}
-	}
-
-	if c.State == containers.ContainerRunningState {
-		images[key].running++
-	} else if c.State == containers.ContainerExitedState {
-		images[key].stopped++
+// DockerFactory is exported for integration testing
+func DockerFactory() check.Check {
+	return &DockerCheck{
+		CheckBase: core.NewCheckBase(dockerCheckName),
+		instance:  &DockerConfig{},
 	}
 }
 
-func (d *DockerCheck) countAndWeightImages(sender aggregator.Sender, imageTagsByImageID map[string][]string, du *docker.DockerUtil) error {
-	if d.instance.CollectImagesStats == false {
-		return nil
-	}
-
-	availableImages, err := du.Images(context.TODO(), false)
-	if err != nil {
-		return err
-	}
-	allImages, err := du.Images(context.TODO(), true)
+// Configure parses the check configuration and init the check
+func (d *DockerCheck) Configure(config, initConfig integration.Data, source string) error {
+	err := d.CommonConfigure(config, source)
 	if err != nil {
 		return err
 	}
 
-	if d.instance.CollectImageSize {
-		for _, i := range availableImages {
-			if tags, ok := imageTagsByImageID[i.ID]; ok {
-				sender.Gauge("docker.image.virtual_size", float64(i.VirtualSize), "", tags)
-				sender.Gauge("docker.image.size", float64(i.Size), "", tags)
-			} else {
-				log.Tracef("Skipping image %s, no repo tags", i.ID)
-			}
-		}
+	d.instance.Parse(config) //nolint:errcheck
+
+	if len(d.instance.FilteredEventType) == 0 {
+		d.instance.FilteredEventType = []string{"top", "exec_create", "exec_start", "exec_die"}
 	}
-	sender.Gauge("docker.images.available", float64(len(availableImages)), "", nil)
-	sender.Gauge("docker.images.intermediate", float64(len(allImages)-len(availableImages)), "", nil)
+
+	// Use the same hostname as the agent so that host tags (like `availability-zone:us-east-1b`)
+	// are attached to Docker events from this host. The hostname from the docker api may be
+	// different than the agent hostname depending on the environment (like EC2 or GCE).
+	d.dockerHostname, err = util.GetHostname(context.TODO())
+	if err != nil {
+		log.Warnf("Can't get hostname from docker, events will not have it: %w", err)
+	}
+
+	d.containerFilter, err = containers.GetSharedMetricFilter()
+	if err != nil {
+		log.Warnf("Can't get container include/exclude filter, no filtering will be applied: %w", err)
+	}
+
+	d.processor = generic.NewProcessor(metrics.GetProvider(), generic.MetadataContainerLister{}, metricsAdapter{}, d.containerFilter)
+
+	d.setOkExitCodes()
+
 	return nil
+}
+
+
+// metricsAdapter implements the generic.MetricsAdapter interface
+type metricsAdapter struct{}
+
+// AdaptTags can be used to change Tagger tags before submitting the metrics
+func (a *metricsAdapter) AdaptTags(tags []string, c *workloadmeta.Container) []string {
+	return append(tags, "runtime:docker")
+}
+
+// AdaptMetrics can be used to change metrics (change name or value) before submitting the metric.
+func (a *metricsAdapter) AdaptMetrics(metricName string, value float64) (string, float64) {
+	switch metricName {
+	case "container.uptime":
+		return "docker.uptime", value
+	case ""
+	}
+}
+
+func (d *DockerCheck) getSender() (aggregator.Sender, error) {
+	sender, err := aggregator.GetSender(d.ID())
+	if err != nil {
+		return sender, err
+	}
+	if len(d.instance.CappedMetrics) == 0 {
+		// No cap set, using a bare sender
+		return sender, nil
+	}
+
+	return generic.NewCappedSender(d.instance.CappedMetrics, sender), nil
 }
 
 // Run executes the check
 func (d *DockerCheck) Run() error {
+	sender, err := d.GetSender()
+	if err != nil {
+		return err
+	}
+
+	du, err := docker.GetDockerUtil()
+	if err != nil {
+		sender.ServiceCheck(DockerServiceUp, metrics.ServiceCheckCritical, "", nil, err.Error())
+		d.Warnf("Error initialising check: %s", err) //nolint:errcheck
+		return err
+	}
+
+	_, err = du.RawContainerList(context.TODO(), types.ContainerListOptions{All: true})
+	if err != nil {
+		sender.ServiceCheck(DockerServiceUp, metrics.ServiceCheckCritical, "", nil, err.Error())
+		d.Warnf("Error collecting containers: %s", err) //nolint:errcheck
+		return err
+	}
+}
+
+func (d *DockerCheck) RunOld() error {
 	sender, err := d.GetSender()
 	if err != nil {
 		return err
@@ -406,37 +430,6 @@ func (d *DockerCheck) reportIOMetrics(io *cmetrics.ContainerIOStats, tags []stri
 	sender.Gauge("docker.container.open_fds", float64(io.OpenFiles), "", tags)
 }
 
-// Configure parses the check configuration and init the check
-func (d *DockerCheck) Configure(config, initConfig integration.Data, source string) error {
-	err := d.CommonConfigure(config, source)
-	if err != nil {
-		return err
-	}
-
-	d.instance.Parse(config) //nolint:errcheck
-
-	if len(d.instance.FilteredEventType) == 0 {
-		d.instance.FilteredEventType = []string{"top", "exec_create", "exec_start", "exec_die"}
-	}
-
-	// Use the same hostname as the agent so that host tags (like `availability-zone:us-east-1b`)
-	// are attached to Docker events from this host. The hostname from the docker api may be
-	// different than the agent hostname depending on the environment (like EC2 or GCE).
-	d.dockerHostname, err = util.GetHostname(context.TODO())
-	if err != nil {
-		log.Warnf("Can't get hostname from docker, events will not have it: %w", err)
-	}
-
-	d.containerFilter, err = containers.GetSharedMetricFilter()
-	if err != nil {
-		log.Warnf("Can't get container include/exclude filter, no filtering will be applied: %w", err)
-	}
-
-	d.setOkExitCodes()
-
-	return nil
-}
-
 // setOkExitCodes defines the ok exit codes based on
 // the default values and the OkExitCodes config field.
 func (d *DockerCheck) setOkExitCodes() {
@@ -456,14 +449,75 @@ func (d *DockerCheck) setOkExitCodes() {
 	d.okExitCodes = map[int]struct{}{0: {}, 143: {}}
 }
 
-// DockerFactory is exported for integration testing
-func DockerFactory() check.Check {
-	return &DockerCheck{
-		CheckBase: core.NewCheckBase(dockerCheckName),
-		instance:  &DockerConfig{},
+func updateContainerRunningCount(images map[string]*containerPerImage, c *containers.Container) {
+	var containerTags []string
+	var err error
+
+	// Containers that are not running (either pending or stopped) are not
+	// collected by the tagger, so they won't have any tags and will cause
+	// an expensive tagger fetch.  To have *some* tags for stopped
+	// containers, we treat them as excluded containers and make a
+	// synthetic list of tags from basic container information.
+	if c.Excluded || c.State != containers.ContainerRunningState {
+		// TODO we can do SplitImageName because we are in the docker corecheck and the image name is not a sha[...]
+		// We should resolve the image tags in the tagger as a real entity.
+		long, short, tag, err := containers.SplitImageName(c.Image)
+		if err != nil {
+			log.Errorf("Cannot split the image name %s: %v", c.Image, err)
+			return
+		}
+		containerTags = []string{
+			fmt.Sprintf("docker_image:%s", c.Image),
+			fmt.Sprintf("image_name:%s", long),
+			fmt.Sprintf("image_tag:%s", tag),
+			fmt.Sprintf("short_image:%s", short),
+		}
+	} else {
+		containerTags, err = tagger.Tag(c.EntityID, collectors.LowCardinality)
+		if err != nil {
+			log.Errorf("Could not collect tags for container %s: %s", c.ID[:12], err)
+			return
+		}
+		sort.Strings(containerTags)
+	}
+
+	key := strings.Join(containerTags, "|")
+	if _, found := images[key]; !found {
+		images[key] = &containerPerImage{tags: containerTags, running: 0, stopped: 0}
+	}
+
+	if c.State == containers.ContainerRunningState {
+		images[key].running++
+	} else if c.State == containers.ContainerExitedState {
+		images[key].stopped++
 	}
 }
 
-func init() {
-	core.RegisterCheck("docker", DockerFactory)
+func (d *DockerCheck) countAndWeightImages(sender aggregator.Sender, imageTagsByImageID map[string][]string, du *docker.DockerUtil) error {
+	if d.instance.CollectImagesStats == false {
+		return nil
+	}
+
+	availableImages, err := du.Images(context.TODO(), false)
+	if err != nil {
+		return err
+	}
+	allImages, err := du.Images(context.TODO(), true)
+	if err != nil {
+		return err
+	}
+
+	if d.instance.CollectImageSize {
+		for _, i := range availableImages {
+			if tags, ok := imageTagsByImageID[i.ID]; ok {
+				sender.Gauge("docker.image.virtual_size", float64(i.VirtualSize), "", tags)
+				sender.Gauge("docker.image.size", float64(i.Size), "", tags)
+			} else {
+				log.Tracef("Skipping image %s, no repo tags", i.ID)
+			}
+		}
+	}
+	sender.Gauge("docker.images.available", float64(len(availableImages)), "", nil)
+	sender.Gauge("docker.images.intermediate", float64(len(allImages)-len(availableImages)), "", nil)
+	return nil
 }

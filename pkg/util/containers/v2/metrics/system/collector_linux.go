@@ -101,6 +101,18 @@ func (c *cgroupCollector) GetContainerNetworkStats(containerID string, cacheVali
 	return buildNetworkStats(c.procPath, networks, pidStats)
 }
 
+func (c *cgroupCollector) GetContainerIDForPID(pid int, cacheValidity time.Duration) (string, error) {
+	// Currently it does not consider cacheVadlity as no cache is used.
+	refs, err := cgroups.ReadCgroupReferences(c.procPath, pid)
+	if err != nil {
+		return "", err
+	}
+
+	// Returns first match in the file. We do expect all container IDs to be the same.
+	cID := cgroups.ContainerRegexp.FindString(string(refs))
+	return cID, nil
+}
+
 func (c *cgroupCollector) getCgroup(containerID string, cacheValidity time.Duration) (cgroups.Cgroup, error) {
 	cg := c.reader.GetCgroup(containerID)
 	if cg == nil {

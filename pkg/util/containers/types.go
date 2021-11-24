@@ -5,11 +5,7 @@
 
 package containers
 
-import (
-	"net"
-
-	"github.com/DataDog/datadog-agent/pkg/util/containers/metrics"
-)
+import "net"
 
 // Known container runtimes
 const (
@@ -59,27 +55,27 @@ const (
 	UnknownUTSMode         = "unknown"
 )
 
-// Container represents a single container on a machine
-// and includes system-level statistics about the container.
-type Container struct {
-	Type        string
-	ID          string
-	EntityID    string
-	Name        string
-	Image       string
-	ImageID     string
-	Created     int64
-	State       string
-	Health      string
-	Pids        []int32
-	Excluded    bool
-	AddressList []NetworkAddress
-	StartedAt   int64
+// // Container represents a single container on a machine
+// // and includes system-level statistics about the container.
+// type Container struct {
+// 	Type        string
+// 	ID          string
+// 	EntityID    string
+// 	Name        string
+// 	Image       string
+// 	ImageID     string
+// 	Created     int64
+// 	State       string
+// 	Health      string
+// 	Pids        []int32
+// 	Excluded    bool
+// 	AddressList []NetworkAddress
+// 	StartedAt   int64
 
-	metrics.ContainerMetrics
-	Limits  metrics.ContainerLimits
-	Network metrics.ContainerNetStats
-}
+// 	metrics.ContainerMetrics
+// 	Limits  metrics.ContainerLimits
+// 	Network metrics.ContainerNetStats
+// }
 
 // NetworkAddress represents a tuple IP/Port/Protocol
 type NetworkAddress struct {
@@ -95,25 +91,25 @@ type NetworkDestination struct {
 	Mask      uint64
 }
 
-// ContainerImplementation is a generic interface that defines a common interface across
-// different container implementation (Linux cgroup, windows containers, etc.)
-type ContainerImplementation interface {
-	// Asks provider to fetch data from system APIs in bulk
-	// It's required to call it before any other function
-	Prefetch() error
+// // ContainerImplementation is a generic interface that defines a common interface across
+// // different container implementation (Linux cgroup, windows containers, etc.)
+// type ContainerImplementation interface {
+// 	// Asks provider to fetch data from system APIs in bulk
+// 	// It's required to call it before any other function
+// 	Prefetch() error
 
-	ContainerExists(containerID string) bool
-	GetContainerStartTime(containerID string) (int64, error)
-	DetectNetworkDestinations(pid int) ([]NetworkDestination, error)
-	GetAgentCID() (string, error)
-	GetPIDs(containerID string) ([]int32, error)
-	ContainerIDForPID(pid int) (string, error)
-	GetDefaultGateway() (net.IP, error)
-	GetDefaultHostIPs() ([]string, error)
-	GetNumFileDescriptors(pid int) (int, error)
+// 	ContainerExists(containerID string) bool
+// 	GetContainerStartTime(containerID string) (int64, error)
+// 	DetectNetworkDestinations(pid int) ([]NetworkDestination, error)
+// 	GetAgentCID() (string, error)
+// 	GetPIDs(containerID string) ([]int32, error)
+// 	ContainerIDForPID(pid int) (string, error)
+// 	GetDefaultGateway() (net.IP, error)
+// 	GetDefaultHostIPs() ([]string, error)
+// 	GetNumFileDescriptors(pid int) (int, error)
 
-	metrics.ContainerMetricsProvider
-}
+// 	metrics.ContainerMetricsProvider
+// }
 
 // FilterType indicates the container filter type
 type FilterType string

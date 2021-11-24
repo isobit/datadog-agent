@@ -13,4 +13,5 @@ type Collector interface {
 	ID() string
 	GetContainerStats(containerID string, cacheValidity time.Duration) (*ContainerStats, error)
 	GetContainerNetworkStats(containerID string, cacheValidity time.Duration, networks map[string]string) (*ContainerNetworkStats, error)
+	GetContainerIDForPID(pid int, cacheValidity time.Duration) (string, error)
 }
