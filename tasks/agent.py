@@ -42,6 +42,7 @@ AGENT_TAG = "datadog/agent:master"
 AGENT_CORECHECKS = [
     "container",
     "containerd",
+    "container_lifecycle",
     "cpu",
     "cri",
     "snmp",

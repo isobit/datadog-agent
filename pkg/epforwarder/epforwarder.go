@@ -25,6 +25,9 @@ const (
 
 	// EventTypeNetworkDevicesMetadata is the event type for network devices metadata
 	EventTypeNetworkDevicesMetadata = "network-devices-metadata"
+
+	// EventTypeContainerLifecycle is the event type for container lifecycle events
+	EventTypeContainerLifecycle = "container-lifecycle"
 )
 
 var passthroughPipelineDescs = []passthroughPipelineDesc{
@@ -63,6 +66,15 @@ var passthroughPipelineDescs = []passthroughPipelineDesc{
 		endpointsConfigPrefix:         "network_devices.metadata.",
 		hostnameEndpointPrefix:        "ndm-intake.",
 		intakeTrackType:               "ndm",
+		defaultBatchMaxConcurrentSend: 10,
+		defaultBatchMaxContentSize:    pkgconfig.DefaultBatchMaxContentSize,
+		defaultBatchMaxSize:           pkgconfig.DefaultBatchMaxSize,
+	},
+	{
+		eventType:                     EventTypeContainerLifecycle,
+		endpointsConfigPrefix:         "container_lifecycle.events.",
+		hostnameEndpointPrefix:        "contlcycle-intake.", // TODO: Create the intake
+		intakeTrackType:               "contlcycle",
 		defaultBatchMaxConcurrentSend: 10,
 		defaultBatchMaxContentSize:    pkgconfig.DefaultBatchMaxContentSize,
 		defaultBatchMaxSize:           pkgconfig.DefaultBatchMaxSize,
