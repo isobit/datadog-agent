@@ -454,7 +454,7 @@ func (s *store) handleEvents(evs []CollectorEvent) {
 				filteredEvents = append(filteredEvents, Event{
 					Type:    EventTypeUnset,
 					Sources: evSources,
-					Entity:  ev.Entity.GetID(),
+					Entity:  ev.Entity,
 				})
 				continue
 			}
@@ -462,7 +462,7 @@ func (s *store) handleEvents(evs []CollectorEvent) {
 			filteredEvents = append(filteredEvents, Event{
 				Type:    EventTypeUnset,
 				Sources: evSources,
-				Entity:  ev.Entity.GetID(),
+				Entity:  ev.Entity,
 			})
 		}
 
