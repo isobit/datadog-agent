@@ -41,7 +41,7 @@ type GoInstallation struct {
 // the error value in the third return value.
 // If the error occurs while as the result of running a command,
 // then its output is also returned in the second return value.
-// Otherwise, f installation is successful,
+// Otherwise, if installation is successful,
 // this function returns the absolute path to the binary
 // in the first return value.
 //
