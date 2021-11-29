@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/go-delve/delve/pkg/goversion"
 
@@ -157,7 +156,6 @@ func (r *Runner) installAllVersions(ctx context.Context) (map[goversion.GoVersio
 	close(jobs)
 
 	exeLocations := make(map[goversion.GoVersion]string)
-	var exeLocationsMu sync.Mutex
 	for range r.Versions {
 		select {
 		case result := <-results:
@@ -166,9 +164,7 @@ func (r *Runner) installAllVersions(ctx context.Context) (map[goversion.GoVersio
 				cancel()
 				return nil, result.err
 			}
-			exeLocationsMu.Lock()
 			exeLocations[result.version] = result.exe
-			exeLocationsMu.Unlock()
 			log.Printf("[%s--install] installed to %s", versionToString(result.version), result.exe)
 		case <-ctx.Done():
 			return nil, ctx.Err()
