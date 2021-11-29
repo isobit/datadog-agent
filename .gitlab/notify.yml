@@ -61,3 +61,17 @@ notify-on-failure:
       else
         echo "This pipeline was triggered by another repository, skipping notification."
       fi
+
+notify-on-go-lookup-tables-stale:
+  extends: .slack-notifier-base
+  # rules: ???
+  # TODO: figure out how to make this run only when the `go_lookup_tables_check` job fails.
+  #       https://gitlab.com/gitlab-org/gitlab/-/issues/19400
+  #       Maybe create artifact upon failure and test for the artifact existing here.
+  dependencies: []
+  script: |
+    MESSAGE_TEXT="Go version lookup tables in system-probe are out-of-date.
+    See CI run <$CI_PIPELINE_URL|$CI_PIPELINE_ID>.
+    Run `inv -e system-probe.generate-lookup-tables` to re-generate the lookup tables."
+    postmessage "#agent-go-toolchain-ci-notif-tests" "$MESSAGE_TEXT"
+

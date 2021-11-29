@@ -709,15 +709,38 @@ def generate_cgo_types(ctx, windows=is_windows, replace_absolutes=True):
 
 
 @task
-def generate_lookup_tables(ctx, windows=is_windows, replace_absolutes=True):
+def generate_lookup_tables(ctx, windows=is_windows):
     if windows:
         return
 
-    lookup_table_files = [
+    lookup_table_generate_files = [
         "./pkg/network/go/goid/main.go",
     ]
-    for f in lookup_table_files:
+    for f in lookup_table_generate_files:
         ctx.run("go generate {file}".format(file=f))
+
+
+@task
+def check_lookup_tables(ctx, windows=is_windows):
+    if windows:
+        return
+
+    # Maps packages to the file containing the generated lookup table
+    # (that should have been generated as a result
+    # of running the `generate_lookup_tables` task)
+    lookup_tables = {
+        "pkg/network/go/goid": "./pkg/network/go/goid/goid_offset.go",
+    }
+    errors_found = []
+    for pkg, generated_file in lookup_tables.items():
+        res = ctx.run("git diff-files --exit-code {} {}".format(generated_file, generated_file), warn=True)
+        if res.exited is None or res.exited > 0:
+            errors_found.append("generated Go version lookup table for {} package (at {}) is out of sync".format(pkg, generated_file))
+
+    if errors_found:
+        message = "\nErrors found:\n" + "\n".join("  - " + error for error in errors_found)
+        message += "\n\nRun 'inv -e system-probe.generate-lookup-tables' to fix 'out of sync' errors."
+        raise Exit(message=message)
 
 
 def is_root():
