@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/go-delve/delve/pkg/goversion"
@@ -67,6 +69,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	// First, install all Go toolchain versions
 	// to produce a map of go version -> "go" binary path
+	log.Printf("installing Go toolchain versions in %s", r.getInstallLocation())
 	executables, err := r.installAllVersions(ctx)
 	if err != nil {
 		return fmt.Errorf("error while installing Go toolchains for matrix runner: %w", err)
@@ -86,6 +89,8 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	cancellableContext, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	log.Printf("running commands on matrix of toolchains with parallelism of %d", r.Parallelism)
 
 	for i := 0; i < r.Parallelism; i++ {
 		go func() {
@@ -116,6 +121,8 @@ func (r *Runner) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+
+	log.Println("done running commands on matrix of toolchains")
 
 	return nil
 }
@@ -162,6 +169,7 @@ func (r *Runner) installAllVersions(ctx context.Context) (map[goversion.GoVersio
 			exeLocationsMu.Lock()
 			exeLocations[result.version] = result.exe
 			exeLocationsMu.Unlock()
+			log.Printf("[%s--install] installed to %s", versionToString(result.version), result.exe)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -179,7 +187,7 @@ func (r *Runner) installSingleVersion(ctx context.Context, version goversion.GoV
 			// Dump the output of the subprocess
 			scanner := bufio.NewScanner(bytes.NewReader(errOutput))
 			for scanner.Scan() {
-				fmt.Printf("[%s--install] %s\n", versionStr, scanner.Text())
+				log.Printf("[%s--install] [output] %s", versionStr, scanner.Text())
 			}
 		}
 
@@ -199,14 +207,18 @@ func (r *Runner) runSingleCommand(ctx context.Context, goExe string, version gov
 
 	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "GOARCH", arch))
 	// The $HOME directory needs to be set to the Go installation directory
-	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "HOME", r.getInstallLocation(version)))
+	command.Env = append(command.Env, fmt.Sprintf("%s=%s", "HOME", r.getInstallLocation()))
 	command.Path = goExe
+
+	// Dump the command
+	log.Printf("[%s-%s] %s %s %s", versionStr, arch, strings.Join(command.Env, " "), command.Path, strings.Join(command.Args[1:], " "))
+
 	output, err := command.CombinedOutput()
 	if err != nil {
 		// Dump the output of the subprocess
 		scanner := bufio.NewScanner(bytes.NewReader(output))
 		for scanner.Scan() {
-			fmt.Printf("[%s-%s] %s\n", versionStr, arch, scanner.Text())
+			log.Printf("[%s-%s] [output] %s", versionStr, arch, scanner.Text())
 		}
 
 		return fmt.Errorf("error while running command for (Go version, arch pair) (go%s, %s): %w", versionStr, arch, err)
@@ -220,11 +232,11 @@ func (r *Runner) makeInstallation(version goversion.GoVersion) rungo.GoInstallat
 		Version:         versionToString(version),
 		InstallGopath:   filepath.Join(r.InstallDirectory, "install-gopath"),
 		InstallGocache:  filepath.Join(r.InstallDirectory, "install-gocache"),
-		InstallLocation: r.getInstallLocation(version),
+		InstallLocation: r.getInstallLocation(),
 	}
 }
 
-func (r *Runner) getInstallLocation(version goversion.GoVersion) string {
+func (r *Runner) getInstallLocation() string {
 	return filepath.Join(r.InstallDirectory, "install")
 }
 
